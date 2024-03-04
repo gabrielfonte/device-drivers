@@ -1,4 +1,4 @@
-obj-m := main.o
+obj-m := cdev.o
 
 ARCH=arm
 COMPILER=arm-linux-gnueabihf-
