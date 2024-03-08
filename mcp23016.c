@@ -2,6 +2,8 @@
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/gpio.h>
+#include <linux/gpio/driver.h>
+#include <linux/slab.h>
 #include <linux/types.h>
 
 /* IO Direction Registers */
@@ -53,6 +55,12 @@ static const struct i2c_device_id mcp23016_id[] = {
         { }
 };
 
+/* Device Tree Match Struct */
+static const struct of_device_id mcp23016_ids[] = {
+        { .compatible = "microchip,mcp23016", },
+        { }
+};
+
 static void mcp23016_write_reg8(struct i2c_client *client, u8 reg, u8 value) {
         i2c_smbus_write_byte_data(client, reg, value);
 }
@@ -61,7 +69,7 @@ static u8 mcp23016_read_reg8(struct i2c_client *client, u8 reg) {
         return i2c_smbus_read_byte_data(client, reg);
 }
 
-static int mcp23016_direction(struct gpio_chip *chip, unsigned offset, mcp23016_mode mode) {
+static int mcp23016_direction(struct gpio_chip *chip, unsigned offset, int mode) {
         struct mcp23016 *mcp = get_mcp23016(chip);
 
         /* Calculate port and pin based on offset */
@@ -84,7 +92,7 @@ static int mcp23016_direction(struct gpio_chip *chip, unsigned offset, mcp23016_
             gpios_dir_val |= mask;
 
         /* Writes the new value to the IODIR register */
-        mcp23016_write_reg8(mcp->client, reg, val);
+        mcp23016_write_reg8(mcp->client, reg, gpios_dir_val);
 
         return 0;
 }
@@ -93,7 +101,7 @@ static int mcp23016_direction_input(struct gpio_chip *chip, unsigned offset) {
         return mcp23016_direction(chip, offset, MCP_INPUT_MODE);
 }
 
-static int mcp32016_direction_output(struct gpio_chip *chip, unsigned offset, int value) {
+static int mcp23016_direction_output(struct gpio_chip *chip, unsigned offset, int value) {
         return mcp23016_direction(chip, offset, MCP_OUTPUT_MODE);
 }
 
@@ -116,7 +124,7 @@ static int mcp23016_get_value(struct gpio_chip *chip, unsigned offset) {
         return (gpios_val >> pin) & 1;
 }
 
-static int mcp23016_set_value(struct gpio_chip *chip, unsigned offset, int value) {
+static void mcp23016_set_value(struct gpio_chip *chip, unsigned offset, int value) {
         struct mcp23016 *mcp = get_mcp23016(chip);
 
         /* Calculate port and pin based on offset */
@@ -139,8 +147,6 @@ static int mcp23016_set_value(struct gpio_chip *chip, unsigned offset, int value
 
         /* Writes the new value to the OLAT register */
         mcp23016_write_reg8(mcp->client, reg, gpios_val);
-
-        return 0;
 }
 
 static int mcp23016_probe(struct i2c_client *client, const struct i2c_device_id *id) {
@@ -159,12 +165,12 @@ static int mcp23016_probe(struct i2c_client *client, const struct i2c_device_id 
         mcp->chip.owner = THIS_MODULE;
         mcp->chip.get = mcp23016_get_value;
         mcp->chip.set = mcp23016_set_value;
-        mcp->chip.direction_output = mcp23016_direction_output
+        mcp->chip.direction_output = mcp23016_direction_output;
         mcp->chip.direction_input = mcp23016_direction_input;
         mcp->chip.can_sleep = true;
         i2c_set_clientdata(client, mcp);
 
-        ret = devm_gpiochip_add_data(&client->dev, &mcp->chip, mcp);
+        ret = gpiochip_add(&mcp->chip);
         if(!ret)
             printk(KERN_INFO "MCP23016 GPIO driver probed\n");
         else
@@ -173,15 +179,21 @@ static int mcp23016_probe(struct i2c_client *client, const struct i2c_device_id 
         return ret;
 }
 
+static void mcp23016_remove(struct i2c_client *client) {
+        struct mcp23016 *mcp = i2c_get_clientdata(client);
+        gpiochip_remove(&mcp->chip);
+        printk(KERN_INFO "MCP23016 GPIO driver removed\n");
+}
+
 /* Register I2C driver */
-static struct i2c_driver i2c_drv = {
+struct i2c_driver i2c_drv = {
+        .probe = mcp23016_probe,
+        .remove = mcp23016_remove,
         .driver = {
                 .owner = THIS_MODULE,
                 .name = "mcp23016",
-                .of_match_table = of_match_ptr(mcp23016_of_match),
+                .of_match_table = of_match_ptr(mcp23016_ids),
         },
-        .probe = mcp23016_probe,
-        .remove = mcp23016_remove,
         .id_table = mcp23016_id,
 };
 module_i2c_driver(i2c_drv);
