@@ -27,28 +27,13 @@
 /* Default Initialization Mode */
 #define	IOCON_INIT	        0x00
 
+/* Number of GPIOs on Module */
+#define GPIO_NUM            16
+
 /* Enum of MCP Modes */
 enum mcp23016_mode {
         MCP_OUTPUT_MODE,
         MCP_INPUT_MODE
-};
-
-/* Enum of MCP Pins */
-enum mcp23016_pin {
-        MCP_GPIO_PIN0,
-        MCP_GPIO_PIN1,
-        MCP_GPIO_PIN2,
-        MCP_GPIO_PIN3,
-        MCP_GPIO_PIN4,
-        MCP_GPIO_PIN5,
-        MCP_GPIO_PIN6,
-        MCP_GPIO_PIN7
-};
-
-/* Enum of MCP Pin State */
-enum mcp23016_pin_state {
-        MCP_PIN_LOW,
-        MCP_PIN_HIGH
 };
 
 /* MCP Struct */
@@ -76,13 +61,85 @@ static u8 mcp23016_read_reg8(struct i2c_client *client, u8 reg) {
         return i2c_smbus_read_byte_data(client, reg);
 }
 
-static int mcp23016_direction_input(struct gpio_chip *chip, unsigned offset) {
+static int mcp23016_direction(struct gpio_chip *chip, unsigned offset, mcp23016_mode mode) {
         struct mcp23016 *mcp = get_mcp23016(chip);
-        u8 reg = (offset < 8) ? MCP23016_IODIR0 : MCP23016_IODIR1;
-        u8 mask = 1 << (offset & 7);
-        u8 val = mcp23016_read_reg8(mcp->client, reg);
-        val |= mask;
+
+        /* Calculate port and pin based on offset */
+        u8 port = offset / 8;
+        u8 pin = offset % 8;
+
+        printk(KERN_INFO "Setting direction for port %d and pin %d as %s\n", port, pin, (mode == MCP_OUTPUT_MODE) ? "OUTPUT" : "INPUT");
+
+        /* Port 0 uses reg IODIR0 and Port 1 uses IODIR1 */
+        u8 reg = (port == 0) ? MCP23016_IODIR0 : MCP23016_IODIR1;
+
+        /* Stores the actual value of GPIOs direction */
+        u8 gpios_dir_val = mcp23016_read_reg8(mcp->client, reg);
+
+        /* Sets the desired direction for the desired pin and port */
+        u8 mask = 1 << pin;
+        if(mode == MCP_OUTPUT_MODE)
+            gpios_dir_val &= ~mask;
+        else
+            gpios_dir_val |= mask;
+
+        /* Writes the new value to the IODIR register */
         mcp23016_write_reg8(mcp->client, reg, val);
+
+        return 0;
+}
+
+static int mcp23016_direction_input(struct gpio_chip *chip, unsigned offset) {
+        return mcp23016_direction(chip, offset, MCP_INPUT_MODE);
+}
+
+static int mcp32016_direction_output(struct gpio_chip *chip, unsigned offset, int value) {
+        return mcp23016_direction(chip, offset, MCP_OUTPUT_MODE);
+}
+
+static int mcp23016_get_value(struct gpio_chip *chip, unsigned offset) {
+        struct mcp23016 *mcp = get_mcp23016(chip);
+
+        /* Calculate port and pin based on offset */
+        u8 port = offset / 8;
+        u8 pin = offset % 8;
+
+        printk(KERN_INFO "Reading value for port %d and pin %d\n", port, pin);
+
+        /* Port 0 uses reg GP0 and Port 1 uses GP1 */
+        u8 reg = (port == 0) ? MCP23016_GP0 : MCP23016_GP1;
+
+        /* Reads the actual value of the desired pin and port */
+        u8 gpios_val = mcp23016_read_reg8(mcp->client, reg);
+
+        /* Returns the value of the desired pin */
+        return (gpios_val >> pin) & 1;
+}
+
+static int mcp23016_set_value(struct gpio_chip *chip, unsigned offset, int value) {
+        struct mcp23016 *mcp = get_mcp23016(chip);
+
+        /* Calculate port and pin based on offset */
+        u8 port = offset / 8;
+        u8 pin = offset % 8;
+
+        printk(KERN_INFO "Setting value for port %d and pin %d\n", port, pin);
+
+        /* Port 0 uses reg OLAT0 and Port 1 uses OLAT1 */
+        u8 reg = (port == 0) ? MCP23016_OLAT0 : MCP23016_OLAT1;
+
+        /* Reads the actual value of the desired pin and port */
+        u8 gpios_val = mcp23016_read_reg8(mcp->client, reg);
+
+        /* Sets the desired value for the desired pin */
+        if(value)
+            gpios_val |= 1 << pin;
+        else
+            gpios_val &= ~(1 << pin);
+
+        /* Writes the new value to the OLAT register */
+        mcp23016_write_reg8(mcp->client, reg, gpios_val);
+
         return 0;
 }
 
@@ -97,23 +154,23 @@ static int mcp23016_probe(struct i2c_client *client, const struct i2c_device_id 
         mcp->client = client;
         mcp->chip.label = client->name;
         mcp->chip.base = -1;
-        mcp->chip.ngpio = 16;
+        mcp->chip.ngpio = GPIO_NUM;
         mcp->chip.parent = &client->dev;
         mcp->chip.owner = THIS_MODULE;
-        mcp->chip.request = gpiochip_generic_request;
-        mcp->chip.free = gpiochip_generic_free;
-        mcp->chip.get = gpiochip_generic_get;
-        mcp->chip.set = gpiochip_generic_set;
-        mcp->chip.direction_output = gpiochip_generic_direction_output;
-        mcp->chip.direction_input = gpiochip_generic_direction_input;
+        mcp->chip.get = mcp23016_get_value;
+        mcp->chip.set = mcp23016_set_value;
+        mcp->chip.direction_output = mcp23016_direction_output
+        mcp->chip.direction_input = mcp23016_direction_input;
         mcp->chip.can_sleep = true;
         i2c_set_clientdata(client, mcp);
 
         ret = devm_gpiochip_add_data(&client->dev, &mcp->chip, mcp);
-        if (ret)
-            return ret;
+        if(!ret)
+            printk(KERN_INFO "MCP23016 GPIO driver probed\n");
+        else
+            printk(KERN_ERR "MCP23016 GPIO driver probe failed\n");
 
-        return 0;
+        return ret;
 }
 
 /* Register I2C driver */
